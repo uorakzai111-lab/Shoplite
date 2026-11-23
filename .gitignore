@@ -1,0 +1,17 @@
+# secrets
+.env
+
+# node
+node_modules/
+dist/
+
+# java
+target/
+
+# go
+inventory-service/inventory-service
+
+# editors / OS
+.idea/
+.vscode/
+.DS_Store

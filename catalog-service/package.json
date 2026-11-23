@@ -1,0 +1,19 @@
+{
+  "name": "catalog-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ShopLite catalog service: owns the products table",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "express": "^5.3.0",
+    "pg": "^8.23.1"
+  }
+}
