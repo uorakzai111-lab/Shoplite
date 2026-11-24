@@ -13,6 +13,7 @@ RUN npm ci --omit=dev \
     && find /app/node_modules -type f \( -name "*.md" -o -name "*.ts" -o -name "*.map" \) -delete
 
 FROM alpine:3.21
+RUN apk upgrade --no-cache
 ENV LD_LIBRARY_PATH=/usr/local/lib
 RUN adduser -D -u 1000 node
 WORKDIR /app

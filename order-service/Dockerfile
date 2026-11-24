@@ -13,6 +13,7 @@ RUN mvn package -DskipTests -B \
        --output /javaruntime
 
 FROM alpine:3.21
+RUN apk upgrade --no-cache
 ENV JAVA_HOME=/opt/java/openjdk
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 RUN adduser -D -u 10001 appuser

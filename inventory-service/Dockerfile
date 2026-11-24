@@ -6,6 +6,7 @@ COPY main.go ./
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o inventory .
 
 FROM alpine:3.21
+RUN apk upgrade --no-cache
 RUN adduser -D -u 10001 appuser
 WORKDIR /app
 COPY --from=builder /app/inventory ./inventory
