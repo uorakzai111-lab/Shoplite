@@ -76,8 +76,11 @@ docker run -d \
   --network frontend-net \
   --restart unless-stopped \
   -p 80:80 \
+  -p 443:443 \
+  -v "$ROOT_DIR/certs:/etc/nginx/certs:ro" \
+  -v "$ROOT_DIR/frontend/nginx.conf:/etc/nginx/templates/default.conf.template:ro" \
   -e "SERVER_NAME=${SERVER_NAME_VAL}" \
   "shop-frontend:${TAG}"
 
 wait_healthy frontend
-echo "ShopLite is running at http://${SERVER_NAME_VAL}"
+echo "ShopLite is running at https://${SERVER_NAME_VAL}"
