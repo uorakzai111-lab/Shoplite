@@ -2,7 +2,7 @@ name: Build and Deploy
 
 on:
   push:
-    branches: [main, feature/phase2-ecr, feat/phase1-docker-setup]
+    branches: [main, feature/phase2-ecr]
   workflow_dispatch:
 
 env:
@@ -39,7 +39,11 @@ jobs:
           for pair in frontend:frontend catalog-service:catalog inventory-service:inventory order-service:orders; do
             dir=${pair%%:*}
             repo=${pair##*:}
-            docker build --platform linux/amd64 -t $REGISTRY/shoplite/$repo:$TAG ./$dir
+            if aws ecr describe-images --repository-name shoplite/$repo --image-ids imageTag=$TAG >/dev/null 2>&1; then
+              echo "shoplite/$repo:$TAG already exists, skipping"
+              continue
+            fi
+            docker build --provenance=false --platform linux/amd64 -t $REGISTRY/shoplite/$repo:$TAG ./$dir
             docker push $REGISTRY/shoplite/$repo:$TAG
           done
 
