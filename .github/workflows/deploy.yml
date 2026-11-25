@@ -1,0 +1,73 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main, feature/phase2-ecr, feat/phase1-docker-setup]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-southeast-2
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push images
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          TAG=$(git rev-parse --short HEAD)
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          for pair in frontend:frontend catalog-service:catalog inventory-service:inventory order-service:orders; do
+            dir=${pair%%:*}
+            repo=${pair##*:}
+            docker build --platform linux/amd64 -t $REGISTRY/shoplite/$repo:$TAG ./$dir
+            docker push $REGISTRY/shoplite/$repo:$TAG
+          done
+
+      - name: Prepare SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/key.pem
+          chmod 600 ~/.ssh/key.pem
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Copy scripts and nginx config to EC2
+        run: |
+          scp -i ~/.ssh/key.pem scripts/up.sh scripts/down.sh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:~/Shoplite/scripts/
+          scp -i ~/.ssh/key.pem frontend/nginx.conf ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:~/Shoplite/frontend/nginx.conf
+
+      - name: Deploy on EC2
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          ssh -i ~/.ssh/key.pem ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} bash -s << EOF
+          set -euo pipefail
+          cd ~/Shoplite
+          chmod +x scripts/*.sh
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $REGISTRY
+          for s in frontend catalog inventory orders; do
+            docker pull $REGISTRY/shoplite/\$s:$TAG
+            docker tag $REGISTRY/shoplite/\$s:$TAG shop-\$s:$TAG
+          done
+          TAG=$TAG ./scripts/up.sh
+          docker image prune -f
+          EOF
