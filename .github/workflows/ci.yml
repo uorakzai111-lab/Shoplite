@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  hadolint:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dir: [frontend, catalog-service, inventory-service, order-service]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ${{ matrix.dir }}/Dockerfile
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { dir: frontend,          name: frontend,  max: 60 }
+          - { dir: catalog-service,   name: catalog,   max: 200 }
+          - { dir: inventory-service, name: inventory, max: 30 }
+          - { dir: order-service,     name: orders,    max: 300 }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t shop-${{ matrix.name }}:ci ./${{ matrix.dir }}
+      - name: Check size budget
+        run: |
+          size=$(docker image inspect shop-${{ matrix.name }}:ci --format '{{.Size}}')
+          mb=$((size / 1000000))
+          echo "${{ matrix.name }}: ${mb} MB (max ${{ matrix.max }} MB)"
+          [ "$mb" -le "${{ matrix.max }}" ] || { echo "Too big"; exit 1; }
