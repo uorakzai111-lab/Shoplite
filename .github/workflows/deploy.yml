@@ -13,65 +13,81 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - { dir: frontend,          name: frontend }
+          - { dir: catalog-service,   name: catalog }
+          - { dir: inventory-service, name: inventory }
+          - { dir: order-service,     name: orders }
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Log in to ECR
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push images
+      - name: Build and push
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
-          TAG=$(git rev-parse --short HEAD)
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
-          for pair in frontend:frontend catalog-service:catalog inventory-service:inventory order-service:orders; do
-            dir=${pair%%:*}
-            repo=${pair##*:}
-            if aws ecr describe-images --repository-name shoplite/$repo --image-ids imageTag=$TAG >/dev/null 2>&1; then
-              echo "shoplite/$repo:$TAG already exists, skipping"
-              continue
-            fi
-            docker build --provenance=false --platform linux/amd64 -t $REGISTRY/shoplite/$repo:$TAG ./$dir
-            docker push $REGISTRY/shoplite/$repo:$TAG
-          done
+          TAG="${GITHUB_SHA::7}"
+          IMAGE="$REGISTRY/shoplite/${{ matrix.name }}:$TAG"
+          if aws ecr describe-images --repository-name "shoplite/${{ matrix.name }}" \
+               --image-ids imageTag="$TAG" >/dev/null 2>&1; then
+            echo "$IMAGE already exists, skipping"
+            exit 0
+          fi
+          docker build --provenance=false --platform linux/amd64 -t "$IMAGE" ./${{ matrix.dir }}
+          docker push "$IMAGE"
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Prepare SSH
+        env:
+          SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          VM_HOST: ${{ secrets.VM_HOST }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/key.pem
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/key.pem
           chmod 600 ~/.ssh/key.pem
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts
 
-      - name: Copy scripts and nginx config to EC2
-        run: |
-          scp -i ~/.ssh/key.pem scripts/up.sh scripts/down.sh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:~/Shoplite/scripts/
-          scp -i ~/.ssh/key.pem frontend/nginx.conf ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:~/Shoplite/frontend/nginx.conf
-
-      - name: Deploy on EC2
+      - name: Copy deploy.sh and init.sql to the VM
         env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
         run: |
-          ssh -i ~/.ssh/key.pem ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} bash -s << EOF
-          set -euo pipefail
-          cd ~/Shoplite
-          chmod +x scripts/*.sh
-          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $REGISTRY
-          for s in frontend catalog inventory orders; do
-            docker pull $REGISTRY/shoplite/\$s:$TAG
-            docker tag $REGISTRY/shoplite/\$s:$TAG shop-\$s:$TAG
-          done
-          TAG=$TAG ./scripts/up.sh
-          docker image prune -f
-          EOF
+          ssh -i ~/.ssh/key.pem "$VM_USER@$VM_HOST" "mkdir -p ~/Shoplite/scripts ~/Shoplite/db"
+          scp -i ~/.ssh/key.pem scripts/deploy.sh "$VM_USER@$VM_HOST:~/Shoplite/scripts/deploy.sh"
+          scp -i ~/.ssh/key.pem db/init.sql "$VM_USER@$VM_HOST:~/Shoplite/db/init.sql"
+
+      - name: Run deploy.sh on the VM
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          TAG="${GITHUB_SHA::7}"
+          ssh -i ~/.ssh/key.pem "$VM_USER@$VM_HOST" \
+            "cd ~/Shoplite && chmod +x scripts/deploy.sh && IMAGE_TAG=$TAG ./scripts/deploy.sh"
+
+      - name: Smoke test
+        run: |
+          curl -fsS --retry 10 --retry-delay 5 --retry-all-errors \
+            "https://${{ vars.APP_DOMAIN }}/api/catalog/health"
